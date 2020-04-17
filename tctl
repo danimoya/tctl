@@ -1,0 +1,610 @@
+#!/bin/bash
+# Dimensigon - Dummy license file for automation and testing purposes.
+# For educational purposes only - no warranty is provided
+# Test thoroughly - use at your own risk
+# TmaxSoft requires a license for any environment unless you have an agreement specifying differently.
+# Contact Dimensigon.com for further information
+
+# DISCLAIMER
+# Copyright (c) 2018-, KnowTrade and its affiliates, All rights reserved.
+# 
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS 'AS IS'
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+# CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+# POSSIBILITY OF SUCH DAMAGE."                            
+
+# LICENSE
+# This script should be use for development/educational purposes only
+# or you might count with an agreement that cover its usage.
+# Otherwise, please report to Dimensigon+TmaxSoft.
+
+#Navigate throgh the available SECTIONS:
+#__TCTL_GLOBAL_VARIABLES__
+#__TCTL_LIBRARIES__
+#__START_FUNCTIONS__
+#__STOP_FUNCTIONS__
+#__MENU__
+
+#Runtime mode
+set -eu
+
+#__TCTL_GLOBAL_VARIABLES__
+
+#General Variables
+OS_SYSTEM=`uname -s`
+SERVERNAME=`uname -n`
+CURRENT_DATE=`date +%Y%m%d`
+WHOAMI=`whoami`
+DEBUG_MODE=4   #Error (1) <  No Output (2) "Extra INFO" < Output (3) "INFO" < Debug (4)
+
+#Files (permanent files)
+ORIGINAL_HOSTNAME_FILE=~/.original_hostname
+DUMMY_LICENSE_DIR=~
+DUMMY_LICENSE_FILE=$DUMMY_LICENSE_DIR/license_dummy.xml
+TCTL_LOCATION=/usr/local/bin/tctl
+
+#Temporary Files (All will be deleted at script startup)
+# Any LOG_FILE will be sorted and output at the END.
+TEMPFILE_TEMP_TMAX_LICENSES=/tmp/tmax_licenses
+TEMPFILE_DEBUG_LOG_FILE=/tmp/tctl_debug
+TEMPFILE_ERROR_LOG_FILE=/tmp/tctl_error
+TEMPFILE_OUTPUT_LOG_FILE=/tmp/tctl_output
+TEMPFILE_NOUTPUT_LOG_FILE=/tmp/tctl_noutput
+TEMPFILE_ALL_DBS_IN_OS=/tmp/all_dbs_in_os
+
+
+#__TCTL_LIBRARIES__
+# Embedded light functions (Power Functions)
+function dn() { return 0; } #Do Nothing.
+function fdt() { date +%Y%m%d%H%M%S%N; }
+function perror() {  [ $DEBUG_MODE -gt 0 ] && (echo -e "`fdt`:\e[31m\e[5m$@\e[0m"           >> $TEMPFILE_ERROR_LOG_FILE) || dn; }
+function noutput() { [ $DEBUG_MODE -gt 1 ] && (echo -e "`fdt`:\e[96m$@\e[0m"           >> $TEMPFILE_NOUTPUT_LOG_FILE) || dn; }
+function output() { [ $DEBUG_MODE -gt 2 ] && (echo -e "`fdt`:\e[94m$@\e[0m" | tee -a $TEMPFILE_OUTPUT_LOG_FILE) || dn; }
+function debug() {  [ $DEBUG_MODE -gt 3 ] && (echo -e "`fdt`:\e[33m$@\e[0m"           >> $TEMPFILE_DEBUG_LOG_FILE) || dn; }
+function print_files() { for iii in "$@"; do [ -f $iii ] && cat $iii; done; }
+function try_delete() { for iii in "$@"; do [ -f $iii ] && rm -f $iii 2>/dev/null || dn; done; }
+function root_check() { [ $WHOAMI = "root" ] || noutput "\e[33m\e[5mRequires ROOT to run.\e[0m"; }
+
+
+KT_CLOUD_BANNER="
+,--
+    )               Copyright property of KnowTrade™ Corp.
+  _'-.                     All rights reserved.
+ (    ) ),--
+             )-._                     Dimensigon ®
+_________________):
+"
+
+function print_help() {
+    
+    echo -e " \e[96m
+$KT_CLOUD_BANNER
+    \e[33m
+    Tibero Database Dummy License File
+    ==================================
+    - It supports having multiple TB_HOMEs and different OS users as owners.
+    - It should run with ROOT User to start/stop DBs as DBs may reside in different users,
+        and privileges to change the hostname are required.
+    
+    Without parameters, it shows the active Tibero Databases in the system.
+    Output format:
+    TB_SID: TB_HOME : User : Group : PID : Licensee Hostname
+
+    \e[7m\e[31mUsage:\e[33m\e[27m
+
+        \e[7m- As ROOT User:\e[27m
+        \e[96m
+        `basename $0` <start|stop> [-all] [MODE]
+        `basename $0` <start> <TB_SID> <TB_HOME> <USER> [MODE]
+        `basename $0` <stop>  <TB_SID> <TB_HOME> <USER> [MODE]
+        `basename $0` <scan>
+        \e[33m
+        \e[7m- As NON-ROOT User (e.g. tibero,...):\e[27m
+        Any command will show the active Tibero databases. No parameter as well.
+        \e[96m
+        `basename $0` <any>
+        \e[33m
+        
+        MODE = Start modes: NOMOUNT|MOUNT|RECOVERY|NORMAL|RESETLOGS|ALTERDD|READONLY|FAILOVER
+        MODE = Stop modes : NORMAL|POST_TX|IMMEDIATE|ABORT|SWITCHOVER|ABNORMAL
+    \e[0m
+    Automation tooling - Able to running with dummy license for containers and volatile environments.
+    
+    "
+}
+
+function allow_write_tempfiles() {
+
+    for each_tempfile in `grep -E "TEMPFILE.*LOG_FILE.*tmp" $TCTL_LOCATION | grep -v grep | cut -d"=" -f2`
+    do
+       [ -f $each_tempfile ] && chmod 777 $each_tempfile || dn
+    done
+
+}
+
+function cleanup_tempfiles() {
+    
+    for each_tempfile in `grep -E "TEMPFILE.*LOG_FILE.*tmp" $TCTL_LOCATION | grep -v grep | cut -d"=" -f2`
+    do
+        try_delete $each_tempfile
+    done
+
+}
+
+function cat_log_files() {
+
+    for each_logfile in `grep -E "TEMPFILE.*LOG_FILE.*tmp" $TCTL_LOCATION | grep -v grep  | cut -d"=" -f2`
+    do
+        print_files $each_logfile
+    done
+
+}
+
+function sorted_cat_log_files() { cat_log_files  | sort -k1; }
+
+
+function create_original_hostname_backupfile() {
+
+    #Original SERVERNAME
+if [ -f $ORIGINAL_HOSTNAME_FILE ]; then
+    BACKUP_ORIGINAL_HOSTNAME=`cat $ORIGINAL_HOSTNAME_FILE`
+    noutput "Original hostname: $BACKUP_ORIGINAL_HOSTNAME"
+else
+    echo "$SERVERNAME" >> $ORIGINAL_HOSTNAME_FILE
+    noutput "Creating original file: $ORIGINAL_HOSTNAME_FILE"
+fi
+
+}
+
+function reset_hostname() {
+
+    BACKUP_ORIGINAL_HOSTNAME=`cat $ORIGINAL_HOSTNAME_FILE`
+    noutput "Original hostname: $BACKUP_ORIGINAL_HOSTNAME - Current Hostname: $SERVERNAME"
+    which hostnamectl &>/dev/null && hostnamectl set-hostname $BACKUP_ORIGINAL_HOSTNAME \
+    || hostname $BACKUP_ORIGINAL_HOSTNAME
+
+}
+
+function cleanup() {
+
+    reset_hostname
+    sorted_cat_log_files
+    cleanup_tempfiles
+    return 0
+
+}
+
+function find_all_db_homes() {
+
+set +u; [ -z $1 ] && local FINDDIR="/" || local FINDDIR=$1; set -u
+
+    find $FINDDIR -name tbsvr -size +400M -exec stat -c %U:%G:%n {} \; 2>/dev/null | \
+    while IFS=":" read puser pgroup phome
+    do
+        CUR_HOME=`echo $phome | sed 's/\/bin\/tbsvr//'`
+        debug "HOME:$puser:$pgroup:$CUR_HOME"
+        echo "HOME:$puser:$pgroup:$CUR_HOME"
+    done
+
+}
+
+function find_all_license_files() {
+
+    find_all_db_homes | while IFS=":" read ptype puser pgroup phome; do
+        local LICENSE_FILE=$phome/license/license.xml
+        [ -f $LICENSE_FILE ] && (echo "$phome:$LICENSE_FILE" && debug "LICENSE:$phome:$LICENSE_FILE") || dn
+        done
+
+}
+
+function check_license() {
+
+    local LICENSE_FILE=$1
+    local LICENSE_HOME=$2
+    local ISSUE_DATE=`grep issue_date $LICENSE_FILE | awk '{$1=$1};1' | sed -e 's/<[^>]*>//g' | sed -e 's/\r//'`
+    local DEMO_DURATION=`grep demo_duration $LICENSE_FILE | awk '{$1=$1};1' | sed -e 's/<[^>]*>//g' | sed -e 's/\r//'`
+    local ID_HOST=`grep identified_by_host $LICENSE_FILE | awk '{$1=$1};1' | sed -e 's/<[^>]*>//g' | sed -e 's/\r//'`
+    
+    EXPIRATION_DATE=`date '+%Y%m%d' -d "$ISSUE_DATE+$DEMO_DURATION days"`
+        if [ $CURRENT_DATE -ge $EXPIRATION_DATE ]; then
+            local VALIDITY="EXPIRED"
+            noutput "LICENSE:$VALIDITY:$ID_HOST:$LICENSE_HOME:$LICENSE_FILE"
+            return 1
+        else
+            local VALIDITY="VALID"
+            noutput "LICENSE:$VALIDITY:$ID_HOST:$LICENSE_HOME:$LICENSE_FILE"
+            return 0
+        fi
+        
+        
+
+}
+
+function rotate_and_place_dummy() {
+
+cp $1 $2/license/license${CURRENT_DATE}.xml.old
+cp $DUMMY_LICENSE_FILE $1
+noutput "Backing-up old license: $2/license/license${CURRENT_DATE}.xml.old"
+
+}
+
+function error_no_license(){ perror "No licenses to operate HOME: $1"; exit 1; }
+
+function ensure_valid_license() {
+
+    find_all_license_files | while IFS=":" read phome plicense; do
+        debug $plicense $phome
+        check_license $plicense $phome || \
+            (check_license $DUMMY_LICENSE_FILE $DUMMY_LICENSE_DIR \
+            && rotate_and_place_dummy $plicense $phome \
+            || error_no_license $phome)
+        done
+
+}
+
+function set_hostname() {
+
+    which hostnamectl &>/dev/null && hostnamectl set-hostname $1 || hostname $1
+    output "Temporary hostname: `uname -n`"
+
+}
+
+function check_hostname() {
+
+    local LICENSE_FILE=$1/license/license.xml
+    local ID_HOST=`grep identified_by_host $LICENSE_FILE | awk '{$1=$1};1' | sed -e 's/<[^>]*>//g' | sed -e 's/\r//'`
+
+    [ "$SERVERNAME" =  "$ID_HOST" ]  && dn \
+    || set_hostname $ID_HOST
+
+}
+
+function show_all_active_tibero_dbs () {
+
+c=1
+
+    ps -eo pid,user,group,args | grep tbsvr | grep -v "tbsvr_" | grep -v grep \
+    | while read pid puser pgroup pcomm restvar; do
+        local CURRENT_HOME=`ls -l /proc/$pid/exe | awk -F'> ' '{ print $2 }' | sed 's/\/bin\/tbsvr//'`
+        local CURRENT_SID=`echo $restvar | cut -d " " -f4`
+        local LICENSE_FILE=$CURRENT_HOME/license/license.xml
+        check_license $LICENSE_FILE $CURRENT_HOME
+        LAST_LICENSE_FILE=`ls -r $CURRENT_HOME/license/license* |tail -1`
+        local IDENTIFIED_BY_HOST=`grep identified_by_host $LAST_LICENSE_FILE \
+        | awk '{$1=$1};1' | sed -e 's/<[^>]*>//g' | sed -e 's/\r//'`
+                echo "$c :$CURRENT_SID:$CURRENT_HOME:$puser:$pgroup:$pid:$IDENTIFIED_BY_HOST"
+                noutput "$c :$CURRENT_SID:$CURRENT_HOME:$puser:$pgroup:$pid:$IDENTIFIED_BY_HOST"
+                c=$((c+1))
+    done
+
+}
+
+function scan_for_databases() {
+
+    find_all_db_homes | while IFS=":" read ptype puser pgroup phome
+    do
+        local CUR_HOME=$phome
+        debug "SCAN:$ptype:$puser:$pgroup:$phome"
+        find $CUR_HOME -name "*.tip" -size -2M -exec stat -c %U:%G:%n {} \; 2>/dev/null | \
+        while IFS=":" read puser pgroup ptipfile
+            do
+            CUR_TIP_FILE_SID=`basename ${ptipfile} | sed 's/.tip//'`
+            echo "DB:$CUR_TIP_FILE_SID:$CUR_HOME:$puser:$pgroup"
+            noutput "DB:$CUR_TIP_FILE_SID:$CUR_HOME:$puser:$pgroup"
+            done
+    done
+
+}
+#__START_FUNCTIONS__
+
+function startup_failover() {
+
+debug "startup_failover: $@"
+
+tbdown clean
+
+    TB_SID=$1
+    TB_HOME=$2
+    shift
+    shift
+    
+start_specific_sid $TB_SID $TB_HOME "failover" $@
+
+return 0
+
+}
+
+function start_specific_sid() {
+
+    debug "start_specific_sid: $@"
+    TB_SID=$1
+    TB_HOME=$2
+    EXEC_MODE=$3
+    TB_CONFIG=$TB_HOME/config
+    LD_LIBRARY_PATH=$TB_HOME/lib:$TB_HOME/client/lib
+
+    shift
+    shift
+    shift
+
+    debug "start_specific_sid 2: $@"
+    local V_COMMAND=$@
+
+    if [ "$EXEC_MODE" = "failover" ]; then
+        $V_COMMAND
+    elif [ "$EXEC_MODE" = "normal" ]; then
+        $V_COMMAND || startup_failover $TB_SID $TB_HOME $V_COMMAND
+    else
+        echo "EXEC_MODE: $3 not supported."
+        print_help
+    fi
+
+}
+
+function exec_on_db() {
+
+v_user=$1
+shift
+
+local V_COMMAND=$@
+
+debug "exec_on_db: $@"
+allow_write_tempfiles
+su - $v_user -c "$TCTL_LOCATION $V_COMMAND"
+
+}
+
+function valid_stop_modes() {
+
+    case $1 in
+    NORMAL|POST_TX|IMMEDIATE|ABORT|SWITCHOVER|ABNORMAL)    
+        echo $1
+        ;;
+        *)
+        return 1
+        ;;
+    esac
+
+}
+
+function valid_start_modes() {
+
+    case $1 in
+    NOMOUNT|MOUNT|RECOVERY|NORMAL|RESETLOGS|ALTERDD|READONLY|FAILOVER)
+        echo $1
+        ;;
+        *)
+        return 1
+        ;;
+    esac
+
+}
+
+function start_db(){
+
+    try_delete $TEMPFILE_ALL_DBS_IN_OS || touch $TEMPFILE_ALL_DBS_IN_OS
+    
+    if [ "$1" = "-all" ]; then
+    
+        scan_for_databases | cut -d":" -f2,3,4 | tr \/ _ | tr : - >> $TEMPFILE_ALL_DBS_IN_OS
+        
+        for each_db in `show_all_active_tibero_dbs | cut -d":" -f2,3,4 | tr \/ _ | tr : -`
+            do
+                sed -i "/$each_db/d" "$TEMPFILE_ALL_DBS_IN_OS" \
+                && noutput "SED0:$each_db" \
+                || debug "SED1:$each_db"
+            done
+
+                #Remaining DBs to start-up.
+                cat $TEMPFILE_ALL_DBS_IN_OS | tr _ \/ | tr - : | while IFS=":" read psid phome puser
+                do
+                    check_hostname $phome
+                    exec_on_db $puser "start" $psid $phome "normal" "tbboot -t NORMAL"
+                done
+
+    elif [ $# -gt 1 ]; then
+    
+        set +u; [ -z $4 ] && local START_MODE="NORMAL" || START_MODE=`valid_start_modes $4`; set -u
+        
+        local TB_SID=$1
+        local TB_HOME=$2
+        local USER=$3
+        
+        check_hostname $TB_HOME
+        
+        debug "start_db specificdb: $USER $TB_SID $TB_HOME Mode: $START_MODE"
+        
+        show_all_active_tibero_dbs | grep -c "$TB_SID:$TB_HOME:$USER" \
+        && (output "Database $TB_SID:$TB_HOME:$USER already RUNNING" && return 1) \
+        || exec_on_db $USER "start" $TB_SID $TB_HOME "normal" "tbboot -t $START_MODE"
+    
+    fi
+    
+}
+
+function stop_specific_db() {
+
+    debug "stop_specific_sid: $@"
+    TB_SID=$1
+    TB_HOME=$2
+    STOP_MODE=$3
+    TB_CONFIG=$TB_HOME/config
+    LD_LIBRARY_PATH=$TB_HOME/lib:$TB_HOME/client/lib
+
+    shift
+    shift
+    shift
+
+    local V_COMMAND="tbdown -t $STOP_MODE"
+    debug "stop_specific_sid 2: ${V_COMMAND} $@"
+    $V_COMMAND
+
+}
+
+#__STOP_FUNCTIONS__
+function stop_db() {
+
+    if [ "$1" = "-all" ]; then
+
+        show_all_active_tibero_dbs | while IFS=":" read pnumber psid phome puser pgroup ppid pori_hostname
+            do
+                local STOP_MODE="IMMEDIATE"
+                debug "stop_db: $@ $puser $psid $phome $STOP_MODE" 
+                exec_on_db $puser "stop" $psid $phome $STOP_MODE
+            done
+
+    elif [ $# -gt 1 ]; then
+
+        local TB_SID=$1
+        local TB_HOME=$2
+        local USER=$3
+        
+        set +u; [ -z $4 ] && local STOP_MODE="IMMEDIATE" || STOP_MODE=`valid_stop_modes $4`; set -u
+        debug "stop_db specific: $USER $TB_SID $TB_HOME $STOP_MODE"
+        exec_on_db $USER "stop" $TB_SID $TB_HOME $STOP_MODE
+    fi
+
+}
+
+function called_from_root_via_su() {
+
+    ps -eo pid,user,group,args | grep -c -E "root.*tctl" &>/dev/null && return 0 || return 1
+
+}
+
+
+#__MENU__
+function non_root_menu_direct() {
+
+if [ $# -eq 0 ]; then
+    show_all_active_tibero_dbs
+elif [ $# -eq 1 ]; then
+    show_all_active_tibero_dbs
+else
+    print_help
+fi
+
+}
+
+function non_root_menu_via_su() {
+
+if [ $# -eq 0 ]; then
+    show_all_active_tibero_dbs
+elif [ $# -gt 2 ]; then
+
+    case $1 in
+        start)
+            shift
+            start_specific_sid $@
+            ;;
+        stop)
+            shift
+            stop_specific_db $@
+            ;;
+        *)
+            print_help
+            ;;
+    esac
+    
+else
+
+    print_help
+
+fi
+
+}
+
+function root_menu() {
+
+create_original_hostname_backupfile
+
+ensure_valid_license
+
+if [ $# -eq 0 ]; then
+    show_all_active_tibero_dbs
+elif [ $# -eq 1 ]; then
+
+    case $1 in
+        scan)
+            output "Searching the whole system volumes for Tibero Databases... Be patient"
+            scan_for_databases
+            ;;
+        -h|--help)
+            print_help
+            ;;
+        *)
+            print_help
+            ;;
+    esac
+
+elif [ $# -eq 2 ]; then
+
+    #CASE for syntax checking only.
+    case $1 in
+        start)
+            case $2 in
+                        -all)
+                        output "Starting all not running Tibero databases..."
+                        start_db $2
+                        ;;
+                        *)
+                        print_help
+                        ;;
+            esac
+            ;;
+        stop)
+            case $2 in
+                        -all)
+                        output "Stopping all running Tibero databases..."
+                        stop_db $2
+                        ;;
+                        *)
+                        print_help
+                        ;;
+            esac
+            ;;
+        *)
+            print_help
+            ;;
+    esac
+elif [ $# -gt 2 ]; then
+    
+    case $1 in
+        start)
+            shift
+            start_db $@             #sid #home #user #mode
+            ;;
+        stop)
+            output "STOP: $@"
+            shift
+            stop_db $@ #sid #home #user #mode
+            ;;
+        *)
+            print_help
+            ;;
+    esac
+    
+else
+
+    print_help
+
+fi
+
+}
+
+cleanup_tempfiles
+
+if [ "`whoami`" = "root" ];then
+    root_menu $@ && cleanup || cleanup
+else
+    called_from_root_via_su && non_root_menu_via_su $@ \
+    || non_root_menu_direct $@
+fi
+
