@@ -602,7 +602,19 @@ fi
 cleanup_tempfiles
 
 if [ "`whoami`" = "root" ];then
-    root_menu $@ && cleanup || cleanup
+
+    if [ $# -eq 2 ]; then
+            case $1 in
+            check)
+                [ -d $2 ] && (check_hostname $2 && exit 0) || (echo "Directory $2 does not exist" && exit 1)
+                ;;
+			*)
+				root_menu $@ && cleanup || cleanup
+				;;
+            esac
+    else
+            root_menu $@ && cleanup || cleanup
+    fi
 else
     called_from_root_via_su && non_root_menu_via_su $@ \
     || non_root_menu_direct $@
